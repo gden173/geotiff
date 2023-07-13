@@ -129,7 +129,7 @@ func readHeader(r io.Reader) (head, error) {
 	var byteOrder uint16
 	err := binary.Read(r, binary.BigEndian, &byteOrder)
 	if err != nil {
-		return fileHeader, fmt.Errorf("%w: %w", errByteOrder, err)
+		return fileHeader, fmt.Errorf("%w: %s", errByteOrder, err)
 	}
 
 	switch byteOrder {
@@ -348,11 +348,11 @@ func readData(r io.ReadSeeker, tags Tags, header head) ([][]float32, error) {
 		numPixels := uint32(byteCounts[i]) / (uint32(bitsPerSample) / eightByte)
 		tileData := make([]float32, numPixels)
 		if _, err := r.Seek(int64(offset), io.SeekStart); err != nil {
-			return nil, fmt.Errorf("%w: could not find offset: got %w", errGeoTIFFData, err)
+			return nil, fmt.Errorf("%w: could not find offset: got %s", errGeoTIFFData, err)
 		}
 
 		if err := binary.Read(r, header.byteOrder, &tileData); err != nil {
-			return nil, fmt.Errorf("%w: could not read bytes: got %w", errGeoTIFFData, err)
+			return nil, fmt.Errorf("%w: could not read bytes: got %s", errGeoTIFFData, err)
 		}
 
 		data = append(data, tileData)
@@ -390,7 +390,7 @@ func (g *GeoTIFF) AtCoord(x float64, y float64, interp bool) (float32, error) {
 	}
 
 	if interp {
-		return g.interp(p) 
+		return g.interp(p)
 	}
 
 	xIDx := int(math.Abs(rect.UpperLeft.Lon-p.Lon) / g.PixelScaleX)
@@ -434,24 +434,23 @@ func (g *GeoTIFF) interp(p Point) (float32, error) {
 	// See: https://en.wikipedia.org/wiki/Bilinear_interpolation
 	// All the coefficients are equivalent here as it is assumed the grid is equal (which is not correct)
 	// therefore the result is just the mean value
-	var pv float32 =  0.0
+	var pv float32 = 0.0
 	for _, pvals := range pointValues {
 		pv += pvals
 	}
 	return pv / 4.0, nil
-
 }
 
 // AtPoints returns image values at
 // a specified slice of points
 func (g *GeoTIFF) AtPoints(points []Point, interp bool) ([]float32, error) {
 	data := make([]float32, 0, len(points))
-	for _, p := range points {
+	for i, p := range points {
 		v, err := g.AtCoord(p.Lon, p.Lat, interp)
 		if err != nil {
 			return nil, err
 		}
-		data = append(data, v)
+		data[i] = v
 	}
 	return data, nil
 }

@@ -487,5 +487,4 @@ func Test_HaversineDistance(t *testing.T) {
 			t.Errorf("got %f want %f", lyon.Distance(paris), wantDistanceInMetres)
 		}
 	})
-
 }
