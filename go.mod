@@ -1,3 +1,3 @@
-module github.com/den173/geotiff
+module github.com/gden173/geotiff
 
 go 1.20
