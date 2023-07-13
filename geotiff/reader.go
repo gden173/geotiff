@@ -568,7 +568,7 @@ func (p *Point) Equals(px Point) bool {
 // in metres
 func (p *Point) Distance(px Point) float64 {
 	// https://en.wikipedia.org/wiki/Earth_radius#Mean_radius
-	const earthRadiusInMetres = 6_371_008.8
+	const earthRadiusInMetres = 6371008.8
 	d2R := func(deg float64) float64 {
 		return math.Pi * deg / 180.0
 	}
