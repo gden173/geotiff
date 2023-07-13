@@ -482,7 +482,7 @@ func Test_HaversineDistance(t *testing.T) {
 	t.Run("lyon to paris", func(t *testing.T) {
 		lyon := Point{Lat: 45.7597, Lon: 4.8422}
 		paris := Point{Lat: 48.8567, Lon: 2.3508}
-		wantDistanceInMetres := 392_217.259_559_4006
+		wantDistanceInMetres := 392217.2595594006
 		if !checkToTolerance(lyon.Distance(paris), wantDistanceInMetres, 0.0001) {
 			t.Errorf("got %f want %f", lyon.Distance(paris), wantDistanceInMetres)
 		}
