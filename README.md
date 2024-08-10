@@ -2,6 +2,7 @@
 
 [![Go Reference](https://pkg.go.dev/badge/github.com/gden173/geotiff.svg)](https://pkg.go.dev/github.com/gden173/geotiff)
 `main` ![main ci status](https://github.com/gden173/geotiff/actions/workflows/go.yml/badge.svg?branch=main)
+[![codecov](https://codecov.io/github/gden173/geotiff/graph/badge.svg?token=42OSL63XJ1)](https://codecov.io/github/gden173/geotiff)
 
 <!--toc:start-->
 - [Geotiff](#geotiff)
