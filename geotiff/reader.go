@@ -709,6 +709,8 @@ func (gs GeoTIFFStats) String() string {
 	return fmt.Sprintf("Minimum=%.3f, Maximum=%.3f, Mean=%.3f, StdDev=%.3f", gs.Min, gs.Max, gs.Mean, gs.StdDev)
 }
 
+// Stats returns the statistics of the geotiff
+// including the min, max, mean and standard deviation.
 func (g *GeoTIFF) Stats() GeoTIFFStats {
 
 	var minVal float32 = math.MaxFloat32
