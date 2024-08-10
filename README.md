@@ -1,4 +1,7 @@
+# Geotiff
+
 [![Go Reference](https://pkg.go.dev/badge/github.com/gden173/geotiff.svg)](https://pkg.go.dev/github.com/gden173/geotiff)
+`main` ![main ci status](https://github.com/gden173/geotiff/actions/workflows/go.yml/badge.svg?branch=main)
 
 <!--toc:start-->
 - [Geotiff](#geotiff)
@@ -7,7 +10,6 @@
   - [Licence](#licence)
 <!--toc:end-->
 
-# Geotiff
 
 A golang geotiff parsing library.  This is a pure golang implementation with no
 dependencies on gdal or C compilation. This is meant to implement a relatively
@@ -22,7 +24,7 @@ go get github.com/gden173/geotiff@latest
 
 ## Example 
 
-An example of reading in a tiled geotiff is 
+An example of reading in a tiled geotiff is located in the `main.go` file.
 
 ```go
 func main() {
