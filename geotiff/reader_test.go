@@ -243,6 +243,49 @@ func Test_ReadData_Happy(t *testing.T) {
 	}
 }
 
+func Test_Stats_Happy(t *testing.T) {
+	r, err := os.Open(testfile)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	gtiff, err := Read(r)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Check the statistics for the file
+	// Extracted via gdalinfo -stats go/runoffarea/internal/geotiff/testdata/test.tif
+	wantMinimum := 46.557
+	wantMaximum := 942.159
+	wantMean := 234.399
+	wantStdev := 106.601
+
+	got := gtiff.Stats()
+	tolerance := 0.001
+
+	if !checkToTolerance(float64(got.Min), wantMinimum, tolerance) {
+		t.Errorf("minimum value incorrect: want %f got %f", float32(wantMinimum), got.Min)
+	}
+
+	if !checkToTolerance(float64(got.Max), wantMaximum, tolerance) {
+		t.Errorf("maximum value incorrect: want %f got %f", float32(wantMaximum), got.Max)
+	}
+
+	// need to be a bit nicer here, as the floating point error will be larger
+	if !checkToTolerance(float64(got.Mean), wantMean, 0.01) {
+		t.Errorf("mean value incorrect: want %f got %f", float32(wantMean), got.Mean)
+	}
+
+	if !checkToTolerance(float64(got.StdDev), wantStdev, 0.01) {
+		t.Errorf("standard deviation value incorrect: want %f got %f", float32(wantStdev), got.StdDev)
+	}
+
+	if err := r.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func Test_LocationData_Happy(t *testing.T) {
 	t.Run("small testfile", func(t *testing.T) {
 		r, err := os.Open(testfile)
