@@ -3,7 +3,7 @@ package geotiff
 
 import "fmt"
 
-// From the Tiff 6.0 Specifiction (p.13)
+// From the Tiff 6.0 Specification (p.13)
 //
 // An Image File Directory (IFD) consists of a 2-byte count of the number of
 // directory entries (i.e., the number of fields), followed by a sequence of
@@ -111,6 +111,7 @@ func (f fieldType) String() string {
 // Currently only the necessary tags are included for parsing tile formatted GeoTIFF,
 type Tag uint16
 
+//nolint:unused
 const (
 	ImageWidth                Tag = 256 // ImageWidth
 	ImageLength               Tag = 257 // ImageLength
@@ -187,6 +188,7 @@ func (t Tag) String() string {
 	return v
 }
 
+//nolint:unused
 var tagToLen = map[Tag]uint32{
 	ImageWidth:                1,
 	ImageLength:               1,
@@ -220,8 +222,10 @@ var tagToLen = map[Tag]uint32{
 	ModelTransformation:       0,
 }
 
+//nolint:unused
 type photometricInterpretation uint32
 
+//nolint:unused
 const (
 	whiteIsZero photometricInterpretation = 0
 	blackIsZero photometricInterpretation = 1
