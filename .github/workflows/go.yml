@@ -23,9 +23,16 @@ jobs:
       run: go run main.go
 
     - name: Test
-      run: go test -v ./...
+      run: go test -v ./... -coverprofile=coverage.out
 
     - name: golangci-lint
       uses: golangci/golangci-lint-action@v6
       with:
         version: v1.59
+
+    - name: Upload coverage reports to Codecov
+      uses: codecov/codecov-action@v4.0.1
+      with:
+        files: ./coverage.out
+        verbose: true
+        token: ${{ secrets.CODECOV_TOKEN }}
