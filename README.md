@@ -6,7 +6,8 @@
 <!--toc:start-->
 - [Geotiff](#geotiff)
   - [Installation](#installation)
-  - [Example](#example)
+  - [Command Line Example](#command-line-example)
+  - [Library Example](#library-example)
   - [Licence](#licence)
 <!--toc:end-->
 
@@ -21,12 +22,41 @@ small subset of gdal. However, more features may be implemented in the future.
 go get github.com/gden173/geotiff@latest
 ```
 
+## Command Line Example 
 
-## Example 
+The command line tool `geotiff` can be used to read in a geotiff file and print 
+details about the geotiff file. 
+
+```bash
+go build -o geotiff cmd/geotiff/main.go
+./geotiff -info geotiff/testdata/WCSServer.tif
+
+# GeoTiff Info
+# Bounds:
+# Upper Left   ( 135.0000000,  -20.0000000 )
+# Lower Left   ( 135.0000000,  -25.3000000 )
+# Upper Right  ( 140.0000000,  -20.0000000 )
+# Lower Right  ( 140.0000000,  -25.3000000 )
+#
+# Stats:
+# Minimum=46.557, Maximum=942.159, Mean=234.397, StdDev=106.603
+
+```
+
+## Library Example 
 
 An example of reading in a tiled geotiff is located in the `main.go` file.
 
 ```go
+package main
+
+import (
+	"fmt"
+	"os"
+
+	"github.com/gden173/geotiff/geotiff"
+)
+
 func main() {
 	f, err := os.Open("geotiff/testdata/WCSServer.tif")
 	if err != nil {
@@ -47,13 +77,11 @@ func main() {
 	}
 	fmt.Println(bounds)
 }
-```
 
-```
-Upper Left   ( 114.0000000,  -11.0000000 )
-Lower Left   ( 114.0000000,  -44.0000000 )
-Upper Right  ( 153.9000000,  -11.0000000 )
-Lower Right  ( 153.9000000,  -44.0000000 )
+// Upper Left   ( 114.0000000,  -11.0000000 )
+// Lower Left   ( 114.0000000,  -44.0000000 )
+// Upper Right  ( 153.9000000,  -11.0000000 )
+// Lower Right  ( 153.9000000,  -44.0000000 )
 
 ```
 

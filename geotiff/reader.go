@@ -695,3 +695,53 @@ func New(data [][]float32, iWidth uint16, iLength uint16, tWidth uint16, tLength
 	g.tags = tags
 	return g, nil
 }
+
+// Contains the geotiff statistics
+type GeoTIFFStats struct {
+	Min    float32 // Min value in the image
+	Max    float32 // Max value in the image
+	Mean   float32 // Mean value in the image
+	StdDev float32 // Standard deviation of the image
+}
+
+func (gs GeoTIFFStats) String() string {
+	// Only print to 3 decimal places
+	return fmt.Sprintf("Minimum=%.3f, Maximum=%.3f, Mean=%.3f, StdDev=%.3f", gs.Min, gs.Max, gs.Mean, gs.StdDev)
+}
+
+func (g *GeoTIFF) Stats() GeoTIFFStats {
+
+	var minVal float32 = math.MaxFloat32
+	var maxVal float32 = math.SmallestNonzeroFloat32
+	var sum float32
+	var mean float32
+	var sumQ float32
+	var stdDev float32
+	var nonzero float32 = 0
+
+	for i := 0; i < len(g.data); i++ {
+		for j := 0; j < len(g.data[i]); j++ {
+			d := g.data[i][j]
+			if d != 0 {
+				nonzero++
+				sum += d
+				sumQ += d * d
+				if d < minVal {
+					minVal = d
+				}
+				if d > maxVal {
+					maxVal = d
+				}
+			}
+		}
+	}
+	mean = sum / nonzero
+	stdDev = float32(math.Sqrt(float64(sumQ/nonzero - mean*mean)))
+
+	return GeoTIFFStats{
+		Min:    minVal,
+		Max:    maxVal,
+		Mean:   mean,
+		StdDev: stdDev,
+	}
+}
