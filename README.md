@@ -49,6 +49,14 @@ func main() {
 }
 ```
 
+```
+Upper Left   ( 114.0000000,  -11.0000000 )
+Lower Left   ( 114.0000000,  -44.0000000 )
+Upper Right  ( 153.9000000,  -11.0000000 )
+Lower Right  ( 153.9000000,  -44.0000000 )
+
+```
+
 ## Licence 
 
  - [MIT](LICENCE)
