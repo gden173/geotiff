@@ -365,11 +365,19 @@ type GeoTIFF struct {
 	tags        Tags
 	data        [][]float32
 	imageWidth  uint16
-	imageLength uint16
+	imageHeight uint16
 	tileWidth   uint16
 	tileLength  uint16
 	PixelScaleX float64
 	PixelScaleY float64
+}
+
+func (m *GeoTIFF) ImageWidth() int {
+	return len(m.data)
+}
+
+func (m *GeoTIFF) ImageHeight() int {
+	return len(m.data[0])
 }
 
 // AtCoord returns the value closest to the requested latitude and longitude value
@@ -400,6 +408,13 @@ func (g *GeoTIFF) AtCoord(x float64, y float64, interp bool) (float32, error) {
 		return 0, err
 	}
 	return val, nil
+}
+
+func (g *GeoTIFF) AtPoint(x int, y int) (float32, error) {
+	if x < g.ImageWidth() && x >= 0 && x < g.ImageHeight() && y >= 0 {
+		return g.data[x][y], nil
+	}
+	return 0, fmt.Errorf("point %d, %d, lies outside image", x, y)
 }
 
 // interp computes bilinear interpolation between
@@ -457,7 +472,7 @@ func (g *GeoTIFF) AtPoints(points []Point, interp bool) ([]float32, error) {
 
 // loc returns data by location (i.e. an X, and Y point on the image)
 func (g *GeoTIFF) loc(x int, y int) (float32, error) {
-	if x < 0 || x >= int(g.imageWidth) || y < 0 || y >= int(g.imageLength) {
+	if x < 0 || x >= int(g.imageWidth) || y < 0 || y >= int(g.imageHeight) {
 		return 0.0, errors.New("point lies outside image")
 	}
 
@@ -530,7 +545,7 @@ func (g *GeoTIFF) Bounds() (*CornerCoordinates, error) {
 	cc := CornerCoordinates{}
 	if tiePointValues[0] == 0 && tiePointValues[1] == 0 {
 		cc.UpperLeft = Point{Lon: tiePointValues[3], Lat: tiePointValues[4]}
-		cc.LowerLeft = Point{Lon: cc.UpperLeft.Lon, Lat: cc.UpperLeft.Lat - float64(g.imageLength)*g.PixelScaleY}
+		cc.LowerLeft = Point{Lon: cc.UpperLeft.Lon, Lat: cc.UpperLeft.Lat - float64(g.imageHeight)*g.PixelScaleY}
 		cc.LowerRight = Point{Lon: cc.UpperLeft.Lon + float64(g.imageWidth)*g.PixelScaleX, Lat: cc.LowerLeft.Lat}
 		cc.UpperRight = Point{Lon: cc.LowerRight.Lon, Lat: cc.UpperLeft.Lat}
 	} else {
@@ -652,7 +667,7 @@ func Read(r io.ReadSeeker) (*GeoTIFF, error) {
 		tags:        gTags,
 		data:        gData,
 		imageWidth:  imageWidth,
-		imageLength: imageLength,
+		imageHeight: imageLength,
 		tileWidth:   tileWidth,
 		tileLength:  tileLength,
 		PixelScaleX: pixelScaleValues[0],
@@ -687,7 +702,7 @@ func New(data [][]float32, iWidth uint16, iLength uint16, tWidth uint16, tLength
 	g := &GeoTIFF{}
 	g.data = data
 	g.imageWidth = iWidth
-	g.imageLength = iLength
+	g.imageHeight = iLength
 	g.tileWidth = tWidth
 	g.tileLength = tLength
 	g.PixelScaleX = pX
