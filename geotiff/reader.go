@@ -239,12 +239,12 @@ func readTags(r io.ReadSeeker) (Tags, head, error) {
 	// 0.
 	iFDOffset := h.iFDByteOffset
 
-	// Jump to the first IFD Byte Offset
-	if _, err := r.Seek(int64(iFDOffset), io.SeekStart); err != nil {
-		return tags, h, errors.New("error: unable to read IFD Start")
-	}
-
 	for iFDOffset != 0 {
+		// Jump to the IFD Byte Offset
+		if _, err := r.Seek(int64(iFDOffset), io.SeekStart); err != nil {
+			return tags, h, fmt.Errorf("error: unable to seek to start of IFD at %d", iFDOffset)
+		}
+
 		// Per the TIFF 6.0 Specification (p.14)
 		//
 		// The number of Directory Entries is contained in the
