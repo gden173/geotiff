@@ -303,8 +303,8 @@ func readTags(r io.ReadSeeker) (Tags, head, error) {
 
 var errGeoTIFFData = errors.New("could not read GeoTIFF data")
 
-// readData reads the data from a  tiled GeoTIFF file
-// into a 1D 32bit float array
+// readData reads the data from a tiled GeoTIFF file
+// into a 2D 32-bit float array (one slice per tile).
 func readData(r io.ReadSeeker, tags Tags, header head) ([][]float32, error) {
 	fields := [...]Tag{BitsPerSample, ImageLength, ImageWidth, TileWidth, TileLength, TileByteCounts, TileOffsets}
 	shortData := make(map[Tag][]uint16, 0)
@@ -356,6 +356,62 @@ func readData(r io.ReadSeeker, tags Tags, header head) ([][]float32, error) {
 		}
 
 		data = append(data, tileData)
+	}
+	return data, nil
+}
+
+// readStripData reads the data from a striped GeoTIFF file into a 2D 32-bit
+// float array (one slice per strip).
+//
+// The returned layout is compatible with loc(): each strip is treated as a
+// "tile" whose effective width equals imageWidth and effective height equals
+// rowsPerStrip, so the existing tile-index arithmetic in loc() works without
+// modification.
+func readStripData(r io.ReadSeeker, tags Tags, header head) ([][]float32, error) {
+	fields := [...]Tag{BitsPerSample, ImageLength, ImageWidth, RowsPerStrip, StripByteCounts, StripOffsets}
+	shortData := make(map[Tag][]uint16, len(fields))
+	longData := make(map[Tag][]uint32, len(fields))
+	for _, f := range fields {
+		v, ok := tags[f]
+		if !ok {
+			return nil, fmt.Errorf("%w, could not retrieve %s", errGeoTIFFData, f)
+		}
+		ftype, elem := v.value()
+		switch ftype {
+		case SHORT:
+			shortData[f] = elem[0].([]uint16)
+		case LONG:
+			longData[f] = elem[0].([]uint32)
+		default:
+			return nil, fmt.Errorf("%w, incorrect data type for %s - %s", errGeoTIFFData, f, ftype)
+		}
+	}
+
+	imageLength := shortData[ImageLength][0]
+	rowsPerStrip := shortData[RowsPerStrip][0]
+	bitsPerSample := shortData[BitsPerSample][0]
+	offsets := longData[StripOffsets]
+	byteCounts := longData[StripByteCounts]
+
+	// From the TIFF 6.0 Specification (p.38):
+	// StripsPerImage = floor((ImageLength + RowsPerStrip - 1) / RowsPerStrip)
+	numStrips := (imageLength + rowsPerStrip - 1) / rowsPerStrip
+
+	if int(numStrips) != len(offsets) {
+		return nil, errors.New("invalid number of offsets for strips")
+	}
+
+	data := make([][]float32, 0, numStrips)
+	for i, offset := range offsets {
+		numPixels := uint32(byteCounts[i]) / (uint32(bitsPerSample) / eightByte)
+		stripData := make([]float32, numPixels)
+		if _, err := r.Seek(int64(offset), io.SeekStart); err != nil {
+			return nil, fmt.Errorf("%w: could not find offset: got %s", errGeoTIFFData, err)
+		}
+		if err := binary.Read(r, header.byteOrder, &stripData); err != nil {
+			return nil, fmt.Errorf("%w: could not read bytes: got %s", errGeoTIFFData, err)
+		}
+		data = append(data, stripData)
 	}
 	return data, nil
 }
@@ -601,38 +657,81 @@ func (cc CornerCoordinates) String() string {
 	return sb.String()
 }
 
-// Read reads the GeoTIFF file
+// Read reads the GeoTIFF file.
+//
+// Read automatically detects whether the file uses the tiled or striped
+// organisation and dispatches to the appropriate internal reader. For striped
+// files the effective tile dimensions are set to (imageWidth, rowsPerStrip) so
+// that the existing loc() arithmetic works without modification.
 func Read(r io.ReadSeeker) (*GeoTIFF, error) {
 	gTags, header, err := readTags(r)
 	if err != nil {
 		return nil, err
 	}
 
-	gData, err := readData(r, gTags, header)
-	if err != nil {
-		return nil, err
-	}
+	var (
+		gData                                   [][]float32
+		imageWidth, imageLength, tileW, tileLen uint16
+	)
 
-	fields := [...]Tag{ImageLength, ImageWidth, TileWidth, TileLength}
-	shortData := make(map[Tag][]uint16, 0)
-	for _, f := range fields {
-		v, ok := gTags[f]
-		if !ok {
-			return nil, fmt.Errorf("%w, could not retrieve %s", errGeoTIFFData, f)
-		}
-		ftype, elem := v.value()
-		switch ftype {
-		case SHORT:
-			shortData[f] = elem[0].([]uint16)
-		default:
-			return nil, fmt.Errorf("%w, incorrect data type for %s - %s", errGeoTIFFData, f, ftype)
+	_, hasTileWidth := gTags[TileWidth]
+	_, hasTileLength := gTags[TileLength]
 
+	if hasTileWidth && hasTileLength {
+		// Tiled format
+		gData, err = readData(r, gTags, header)
+		if err != nil {
+			return nil, err
 		}
+
+		fields := [...]Tag{ImageLength, ImageWidth, TileWidth, TileLength}
+		shortData := make(map[Tag][]uint16, len(fields))
+		for _, f := range fields {
+			v, ok := gTags[f]
+			if !ok {
+				return nil, fmt.Errorf("%w, could not retrieve %s", errGeoTIFFData, f)
+			}
+			ftype, elem := v.value()
+			switch ftype {
+			case SHORT:
+				shortData[f] = elem[0].([]uint16)
+			default:
+				return nil, fmt.Errorf("%w, incorrect data type for %s - %s", errGeoTIFFData, f, ftype)
+			}
+		}
+		imageWidth = shortData[ImageWidth][0]
+		imageLength = shortData[ImageLength][0]
+		tileW = shortData[TileWidth][0]
+		tileLen = shortData[TileLength][0]
+	} else {
+		// Striped format
+		gData, err = readStripData(r, gTags, header)
+		if err != nil {
+			return nil, err
+		}
+
+		fields := [...]Tag{ImageLength, ImageWidth, RowsPerStrip}
+		shortData := make(map[Tag][]uint16, len(fields))
+		for _, f := range fields {
+			v, ok := gTags[f]
+			if !ok {
+				return nil, fmt.Errorf("%w, could not retrieve %s", errGeoTIFFData, f)
+			}
+			ftype, elem := v.value()
+			switch ftype {
+			case SHORT:
+				shortData[f] = elem[0].([]uint16)
+			default:
+				return nil, fmt.Errorf("%w, incorrect data type for %s - %s", errGeoTIFFData, f, ftype)
+			}
+		}
+		imageWidth = shortData[ImageWidth][0]
+		imageLength = shortData[ImageLength][0]
+		// For striped files, set effective tile dimensions to (imageWidth,
+		// rowsPerStrip) so that loc() works without modification.
+		tileW = imageWidth
+		tileLen = shortData[RowsPerStrip][0]
 	}
-	imageWidth := shortData[ImageWidth][0]
-	imageLength := shortData[ImageLength][0]
-	tileWidth := shortData[TileWidth][0]
-	tileLength := shortData[TileLength][0]
 
 	pixelScale := gTags[ModelPixelScale]
 	pixelScaleLen := 3
@@ -653,8 +752,8 @@ func Read(r io.ReadSeeker) (*GeoTIFF, error) {
 		data:        gData,
 		imageWidth:  imageWidth,
 		imageLength: imageLength,
-		tileWidth:   tileWidth,
-		tileLength:  tileLength,
+		tileWidth:   tileW,
+		tileLength:  tileLen,
 		PixelScaleX: pixelScaleValues[0],
 		PixelScaleY: pixelScaleValues[1],
 	}, nil
