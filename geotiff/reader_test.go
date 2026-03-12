@@ -742,3 +742,178 @@ func Test_Read_StripFormat_Bounds(t *testing.T) {
 		t.Errorf("LowerRight.Lat: got %f, want -20.6", bounds.LowerRight.Lat)
 	}
 }
+
+// makeTestStripTIFFLongDims builds a minimal valid little-endian striped
+// GeoTIFF binary where ImageWidth, ImageLength, BitsPerSample, and
+// RowsPerStrip are stored as LONG (uint32) fields rather than SHORT (uint16).
+// This mirrors the layout used by real-world elevation files such as the NRW
+// DGM1 dataset (https://www.opengeodata.nrw.de/produkte/geobasis/hm/dgm1_tiff/).
+//
+// The image properties are intentionally identical to makeTestStripTIFF so
+// that the same expected values can be reused.
+func makeTestStripTIFFLongDims(t *testing.T) []byte {
+	t.Helper()
+
+	var buf bytes.Buffer
+	w := func(v interface{}) {
+		t.Helper()
+		if err := binary.Write(&buf, binary.LittleEndian, v); err != nil {
+			t.Fatalf("binary.Write: %v", err)
+		}
+	}
+
+	const (
+		imgWidth      = 4
+		imgHeight     = 6
+		rps           = 2 // RowsPerStrip
+		numStrips     = (imgHeight + rps - 1) / rps // = 3
+		bytesPerStrip = imgWidth * rps * 4           // float32 = 4 bytes
+	)
+
+	// Byte offsets for each section of the file.
+	// All dimension IFD entries are written as LONG (8 bytes: type+count+value)
+	// rather than SHORT (which packs the value directly into the 4-byte offset
+	// field), so the offsets differ from makeTestStripTIFF.
+	const (
+		ifdStart           = 8
+		numIFDEntries      = 13
+		ifdSize            = 2 + numIFDEntries*12 + 4 // 162
+		stripOffsetsOff    = ifdStart + ifdSize        // 170
+		stripByteCountsOff = stripOffsetsOff + numStrips*4
+		pixelScaleOff      = stripByteCountsOff + numStrips*4
+		tiepointOff        = pixelScaleOff + 3*8
+		imageDataOff       = tiepointOff + 6*8
+	)
+
+	// Header
+	w(uint16(0x4949))   // II = little-endian
+	w(uint16(42))       // TIFF magic
+	w(uint32(ifdStart)) // offset to first IFD
+
+	// IFD entry count
+	w(uint16(numIFDEntries))
+
+	// writeLong writes a single-value LONG IFD entry whose value fits in the
+	// 4-byte value-offset field (TIFF spec: values ≤ 4 bytes are stored inline).
+	writeLong := func(tag uint16, val uint32) {
+		w(tag); w(uint16(4)); w(uint32(1)); w(val)
+	}
+	writeLongOff := func(tag uint16, count, offset uint32) {
+		w(tag); w(uint16(4)); w(count); w(offset)
+	}
+	writeDoubleOff := func(tag uint16, count, offset uint32) {
+		w(tag); w(uint16(12)); w(count); w(offset)
+	}
+
+	// IFD entries – must be in ascending tag order.
+	// Dimension/sample fields use LONG instead of SHORT to exercise the
+	// SHORT/LONG-agnostic reading path introduced for NRW DGM1 support.
+	writeLong(256, imgWidth)  // ImageWidth      – LONG
+	writeLong(257, imgHeight) // ImageLength     – LONG
+	writeLong(258, 32)        // BitsPerSample   – LONG
+	writeLong(259, 1)         // Compression     – LONG (none)
+	writeLong(262, 1)         // PhotometricInterpretation – LONG
+	writeLongOff(273, numStrips, stripOffsetsOff)    // StripOffsets
+	writeLong(277, 1)                                // SamplesPerPixel – LONG
+	writeLong(278, rps)                              // RowsPerStrip    – LONG
+	writeLongOff(279, numStrips, stripByteCountsOff) // StripByteCounts
+	writeLong(284, 1)                                // PlanarConfiguration – LONG
+	writeLong(339, 3)                                // SampleFormat – LONG (IEEE float)
+	writeDoubleOff(33550, 3, pixelScaleOff)          // ModelPixelScale
+	writeDoubleOff(33922, 6, tiepointOff)            // ModelTiepoint
+
+	w(uint32(0)) // next IFD = none
+
+	// StripOffsets values
+	for i := 0; i < numStrips; i++ {
+		w(uint32(imageDataOff + i*bytesPerStrip))
+	}
+	// StripByteCounts values
+	for i := 0; i < numStrips; i++ {
+		w(uint32(bytesPerStrip))
+	}
+	// ModelPixelScale: (scaleX, scaleY, scaleZ)
+	w(float64(0.1)); w(float64(0.1)); w(float64(0.0))
+	// ModelTiepoint: (I, J, K, X, Y, Z) – upper-left pixel at (135.0, -20.0)
+	w(float64(0)); w(float64(0)); w(float64(0))
+	w(float64(135.0)); w(float64(-20.0)); w(float64(0))
+
+	// Image data: float32 values 1 … 24 in row-major order
+	var v float32 = 1.0
+	for i := 0; i < numStrips*imgWidth*rps; i++ {
+		w(v)
+		v++
+	}
+
+	return buf.Bytes()
+}
+
+// Test_Read_StripFormat_LongDims verifies that a striped GeoTIFF whose
+// dimension tags (ImageWidth, ImageLength, BitsPerSample, RowsPerStrip) are
+// encoded as LONG (uint32) rather than SHORT (uint16) can be read correctly.
+// This exercises the fix for NRW DGM1 files which use LONG types.
+func Test_Read_StripFormat_LongDims(t *testing.T) {
+	data := makeTestStripTIFFLongDims(t)
+	r := bytes.NewReader(data)
+
+	gtiff, err := Read(r)
+	if err != nil {
+		t.Fatalf("Read failed: %v", err)
+	}
+
+	// Same pixel layout as Test_Read_StripFormat_Happy
+	tests := []struct {
+		x, y int
+		want float32
+	}{
+		{0, 0, 1.0},
+		{3, 1, 8.0},
+		{2, 2, 11.0},
+		{1, 4, 18.0},
+		{3, 5, 24.0},
+	}
+
+	for _, tt := range tests {
+		got, err := gtiff.loc(tt.x, tt.y)
+		if err != nil {
+			t.Errorf("loc(%d, %d) error: %v", tt.x, tt.y, err)
+			continue
+		}
+		if got != tt.want {
+			t.Errorf("loc(%d, %d) = %f, want %f", tt.x, tt.y, got, tt.want)
+		}
+	}
+}
+
+// Test_ReadStripData_LongDims verifies that readStripData accepts dimension
+// tags stored as LONG instead of SHORT.
+func Test_ReadStripData_LongDims(t *testing.T) {
+	data := makeTestStripTIFFLongDims(t)
+	r := bytes.NewReader(data)
+
+	tags, h, err := readTags(r)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	strips, err := readStripData(r, tags, h)
+	if err != nil {
+		t.Fatalf("readStripData failed on LONG-dimension TIFF: %v", err)
+	}
+
+	if len(strips) != 3 {
+		t.Fatalf("expected 3 strips, got %d", len(strips))
+	}
+	for i, strip := range strips {
+		if len(strip) != 8 {
+			t.Errorf("strip %d: expected 8 pixels, got %d", i, len(strip))
+		}
+	}
+
+	if strips[0][0] != 1.0 {
+		t.Errorf("strips[0][0]: got %f, want 1.0", strips[0][0])
+	}
+	if strips[2][7] != 24.0 {
+		t.Errorf("strips[2][7]: got %f, want 24.0", strips[2][7])
+	}
+}
