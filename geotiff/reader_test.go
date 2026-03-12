@@ -1,6 +1,7 @@
 package geotiff
 
 import (
+	"bytes"
 	"encoding/binary"
 	"math"
 	"os"
@@ -530,4 +531,214 @@ func Test_HaversineDistance(t *testing.T) {
 			t.Errorf("got %f want %f", lyon.Distance(paris), wantDistanceInMetres)
 		}
 	})
+}
+
+// makeTestStripTIFF builds a minimal valid little-endian striped GeoTIFF binary
+// entirely in memory.
+//
+// Image properties:
+//   - 4 × 6 pixels (width × height), float32, no compression
+//   - 2 rows per strip → 3 strips
+//   - Pixel values 1 … 24 in row-major order
+//   - PixelScale (0.1, 0.1), upper-left tiepoint at (135.0, -20.0)
+func makeTestStripTIFF(t *testing.T) []byte {
+	t.Helper()
+
+	var buf bytes.Buffer
+	w := func(v interface{}) {
+		t.Helper()
+		if err := binary.Write(&buf, binary.LittleEndian, v); err != nil {
+			t.Fatalf("binary.Write: %v", err)
+		}
+	}
+
+	const (
+		imgWidth      = 4
+		imgHeight     = 6
+		rps           = 2 // RowsPerStrip
+		numStrips     = (imgHeight + rps - 1) / rps // = 3 (ceiling division)
+		bytesPerStrip = imgWidth * rps * 4           // float32 = 4 bytes each
+	)
+
+	// Byte offsets for each section of the file.
+	const (
+		ifdStart            = 8
+		numIFDEntries       = 13
+		ifdSize             = 2 + numIFDEntries*12 + 4 // 162
+		stripOffsetsOff     = ifdStart + ifdSize        // 170
+		stripByteCountsOff  = stripOffsetsOff + numStrips*4  // 182
+		pixelScaleOff       = stripByteCountsOff + numStrips*4 // 194
+		tiepointOff         = pixelScaleOff + 3*8             // 218
+		imageDataOff        = tiepointOff + 6*8               // 266
+	)
+
+	// Header
+	w(uint16(0x4949))    // II = little-endian
+	w(uint16(42))        // TIFF magic
+	w(uint32(ifdStart))  // offset to first IFD
+
+	// IFD entry count
+	w(uint16(numIFDEntries))
+
+	// Helpers to write individual IFD entries.
+	writeShort := func(tag, val uint16) {
+		w(tag); w(uint16(3)); w(uint32(1)); w(val); w(uint16(0))
+	}
+	writeLongOff := func(tag uint16, count, offset uint32) {
+		w(tag); w(uint16(4)); w(count); w(offset)
+	}
+	writeDoubleOff := func(tag uint16, count, offset uint32) {
+		w(tag); w(uint16(12)); w(count); w(offset)
+	}
+
+	// IFD entries – must be sorted in ascending tag order.
+	writeShort(256, imgWidth)                                       // ImageWidth
+	writeShort(257, imgHeight)                                      // ImageLength
+	writeShort(258, 32)                                             // BitsPerSample
+	writeShort(259, 1)                                              // Compression = none
+	writeShort(262, 1)                                              // PhotometricInterpretation
+	writeLongOff(273, numStrips, stripOffsetsOff)                   // StripOffsets
+	writeShort(277, 1)                                              // SamplesPerPixel
+	writeShort(278, rps)                                            // RowsPerStrip
+	writeLongOff(279, numStrips, stripByteCountsOff)                // StripByteCounts
+	writeShort(284, 1)                                              // PlanarConfiguration
+	writeShort(339, 3)                                              // SampleFormat = IEEE float
+	writeDoubleOff(33550, 3, pixelScaleOff)                         // ModelPixelScale
+	writeDoubleOff(33922, 6, tiepointOff)                           // ModelTiepoint
+
+	w(uint32(0)) // next IFD = none
+
+	// StripOffsets values
+	for i := 0; i < numStrips; i++ {
+		w(uint32(imageDataOff + i*bytesPerStrip))
+	}
+	// StripByteCounts values
+	for i := 0; i < numStrips; i++ {
+		w(uint32(bytesPerStrip))
+	}
+	// ModelPixelScale: (scaleX, scaleY, scaleZ)
+	w(float64(0.1)); w(float64(0.1)); w(float64(0.0))
+	// ModelTiepoint: (I, J, K, X, Y, Z)  – upper-left pixel at (135.0, -20.0)
+	w(float64(0)); w(float64(0)); w(float64(0))
+	w(float64(135.0)); w(float64(-20.0)); w(float64(0))
+
+	// Image data: float32 values 1 … 24 in row-major order
+	var v float32 = 1.0
+	for i := 0; i < numStrips*imgWidth*rps; i++ {
+		w(v)
+		v++
+	}
+
+	return buf.Bytes()
+}
+
+func Test_ReadStripData_Happy(t *testing.T) {
+	data := makeTestStripTIFF(t)
+	r := bytes.NewReader(data)
+
+	tags, h, err := readTags(r)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	strips, err := readStripData(r, tags, h)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// 3 strips × 8 pixels (4 wide, 2 rows) each
+	if len(strips) != 3 {
+		t.Fatalf("expected 3 strips, got %d", len(strips))
+	}
+	for i, strip := range strips {
+		if len(strip) != 8 {
+			t.Errorf("strip %d: expected 8 pixels, got %d", i, len(strip))
+		}
+	}
+
+	// Strip 0 holds rows 0-1: values 1..8
+	if strips[0][0] != 1.0 {
+		t.Errorf("strips[0][0]: got %f, want 1.0", strips[0][0])
+	}
+	if strips[0][7] != 8.0 {
+		t.Errorf("strips[0][7]: got %f, want 8.0", strips[0][7])
+	}
+	// Strip 2 holds rows 4-5: values 17..24
+	if strips[2][0] != 17.0 {
+		t.Errorf("strips[2][0]: got %f, want 17.0", strips[2][0])
+	}
+	if strips[2][7] != 24.0 {
+		t.Errorf("strips[2][7]: got %f, want 24.0", strips[2][7])
+	}
+}
+
+func Test_Read_StripFormat_Happy(t *testing.T) {
+	data := makeTestStripTIFF(t)
+	r := bytes.NewReader(data)
+
+	gtiff, err := Read(r)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Row-major pixel layout (0-indexed):
+	//   Row 0: [ 1,  2,  3,  4]
+	//   Row 1: [ 5,  6,  7,  8]
+	//   Row 2: [ 9, 10, 11, 12]
+	//   Row 3: [13, 14, 15, 16]
+	//   Row 4: [17, 18, 19, 20]
+	//   Row 5: [21, 22, 23, 24]
+	tests := []struct {
+		x, y int
+		want float32
+	}{
+		{0, 0, 1.0},   // row 0, col 0
+		{3, 1, 8.0},   // row 1, col 3
+		{2, 2, 11.0},  // row 2, col 2
+		{1, 4, 18.0},  // row 4, col 1
+		{3, 5, 24.0},  // row 5, col 3
+	}
+
+	for _, tt := range tests {
+		got, err := gtiff.loc(tt.x, tt.y)
+		if err != nil {
+			t.Errorf("loc(%d, %d) error: %v", tt.x, tt.y, err)
+			continue
+		}
+		if got != tt.want {
+			t.Errorf("loc(%d, %d) = %f, want %f", tt.x, tt.y, got, tt.want)
+		}
+	}
+}
+
+func Test_Read_StripFormat_Bounds(t *testing.T) {
+	data := makeTestStripTIFF(t)
+	r := bytes.NewReader(data)
+
+	gtiff, err := Read(r)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	bounds, err := gtiff.Bounds()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Tiepoint (0,0) → upper-left at (135.0, -20.0)
+	// Width=4, Height=6, PixelScale=(0.1, 0.1)
+	// LowerRight = (135.0 + 4*0.1, -20.0 - 6*0.1) = (135.4, -20.6)
+	tolerance := 1e-9
+	if !checkToTolerance(bounds.UpperLeft.Lon, 135.0, tolerance) {
+		t.Errorf("UpperLeft.Lon: got %f, want 135.0", bounds.UpperLeft.Lon)
+	}
+	if !checkToTolerance(bounds.UpperLeft.Lat, -20.0, tolerance) {
+		t.Errorf("UpperLeft.Lat: got %f, want -20.0", bounds.UpperLeft.Lat)
+	}
+	if !checkToTolerance(bounds.LowerRight.Lon, 135.4, tolerance) {
+		t.Errorf("LowerRight.Lon: got %f, want 135.4", bounds.LowerRight.Lon)
+	}
+	if !checkToTolerance(bounds.LowerRight.Lat, -20.6, tolerance) {
+		t.Errorf("LowerRight.Lat: got %f, want -20.6", bounds.LowerRight.Lat)
+	}
 }
