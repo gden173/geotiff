@@ -303,36 +303,69 @@ func readTags(r io.ReadSeeker) (Tags, head, error) {
 
 var errGeoTIFFData = errors.New("could not read GeoTIFF data")
 
+// tagUint32Slice returns the values of a tag as a []uint32 slice, accepting
+// both SHORT (uint16) and LONG (uint32) field types.  This is necessary
+// because the TIFF spec allows writers to use either type for fields such as
+// ImageWidth, ImageLength, RowsPerStrip, TileWidth, TileLength,
+// StripOffsets, StripByteCounts, TileOffsets and TileByteCounts.
+func tagUint32Slice(tags Tags, tag Tag) ([]uint32, error) {
+	v, ok := tags[tag]
+	if !ok {
+		return nil, fmt.Errorf("%w, could not retrieve %s", errGeoTIFFData, tag)
+	}
+	ftype, elem := v.value()
+	switch ftype {
+	case SHORT:
+		shorts := elem[0].([]uint16)
+		longs := make([]uint32, len(shorts))
+		for i, s := range shorts {
+			longs[i] = uint32(s)
+		}
+		return longs, nil
+	case LONG:
+		return elem[0].([]uint32), nil
+	default:
+		return nil, fmt.Errorf("%w, incorrect data type for %s - %s", errGeoTIFFData, tag, ftype)
+	}
+}
+
 // readData reads the data from a tiled GeoTIFF file
 // into a 2D 32-bit float array (one slice per tile).
 func readData(r io.ReadSeeker, tags Tags, header head) ([][]float32, error) {
-	fields := [...]Tag{BitsPerSample, ImageLength, ImageWidth, TileWidth, TileLength, TileByteCounts, TileOffsets}
-	shortData := make(map[Tag][]uint16, 0)
-	longData := make(map[Tag][]uint32, 0)
-	for _, f := range fields {
-		v, ok := tags[f]
-		if !ok {
-			return nil, fmt.Errorf("%w, could not retrieve %s", errGeoTIFFData, f)
-		}
-		ftype, elem := v.value()
-		switch ftype {
-		case SHORT:
-			shortData[f] = elem[0].([]uint16)
-		case LONG:
-			longData[f] = elem[0].([]uint32)
-		default:
-			return nil, fmt.Errorf("%w, incorrect data type for %s - %s", errGeoTIFFData, f, ftype)
-
-		}
+	bitsPerSampleVals, err := tagUint32Slice(tags, BitsPerSample)
+	if err != nil {
+		return nil, err
+	}
+	imageWidthVals, err := tagUint32Slice(tags, ImageWidth)
+	if err != nil {
+		return nil, err
+	}
+	imageLengthVals, err := tagUint32Slice(tags, ImageLength)
+	if err != nil {
+		return nil, err
+	}
+	tileWidthVals, err := tagUint32Slice(tags, TileWidth)
+	if err != nil {
+		return nil, err
+	}
+	tileLengthVals, err := tagUint32Slice(tags, TileLength)
+	if err != nil {
+		return nil, err
+	}
+	offsets, err := tagUint32Slice(tags, TileOffsets)
+	if err != nil {
+		return nil, err
+	}
+	byteCounts, err := tagUint32Slice(tags, TileByteCounts)
+	if err != nil {
+		return nil, err
 	}
 
-	imageWidth := shortData[ImageWidth][0]
-	imageLength := shortData[ImageLength][0]
-	tileWidth := shortData[TileWidth][0]
-	tileLength := shortData[TileLength][0]
-	bitsPerSample := shortData[BitsPerSample][0]
-	offsets := longData[TileOffsets]
-	byteCounts := longData[TileByteCounts]
+	imageWidth := imageWidthVals[0]
+	imageLength := imageLengthVals[0]
+	tileWidth := tileWidthVals[0]
+	tileLength := tileLengthVals[0]
+	bitsPerSample := bitsPerSampleVals[0]
 
 	// From the Tiff 6.0 Specification (p. 67)
 	tilesAcross := (imageWidth + tileWidth - 1) / tileWidth
@@ -345,7 +378,7 @@ func readData(r io.ReadSeeker, tags Tags, header head) ([][]float32, error) {
 
 	data := make([][]float32, 0, tilesPerImage)
 	for i, offset := range offsets {
-		numPixels := uint32(byteCounts[i]) / (uint32(bitsPerSample) / eightByte)
+		numPixels := byteCounts[i] / (bitsPerSample / eightByte)
 		tileData := make([]float32, numPixels)
 		if _, err := r.Seek(int64(offset), io.SeekStart); err != nil {
 			return nil, fmt.Errorf("%w: could not find offset: got %s", errGeoTIFFData, err)
@@ -368,30 +401,36 @@ func readData(r io.ReadSeeker, tags Tags, header head) ([][]float32, error) {
 // rowsPerStrip, so the existing tile-index arithmetic in loc() works without
 // modification.
 func readStripData(r io.ReadSeeker, tags Tags, header head) ([][]float32, error) {
-	fields := [...]Tag{BitsPerSample, ImageLength, ImageWidth, RowsPerStrip, StripByteCounts, StripOffsets}
-	shortData := make(map[Tag][]uint16, len(fields))
-	longData := make(map[Tag][]uint32, len(fields))
-	for _, f := range fields {
-		v, ok := tags[f]
-		if !ok {
-			return nil, fmt.Errorf("%w, could not retrieve %s", errGeoTIFFData, f)
-		}
-		ftype, elem := v.value()
-		switch ftype {
-		case SHORT:
-			shortData[f] = elem[0].([]uint16)
-		case LONG:
-			longData[f] = elem[0].([]uint32)
-		default:
-			return nil, fmt.Errorf("%w, incorrect data type for %s - %s", errGeoTIFFData, f, ftype)
-		}
+	bitsPerSampleVals, err := tagUint32Slice(tags, BitsPerSample)
+	if err != nil {
+		return nil, err
+	}
+	imageLengthVals, err := tagUint32Slice(tags, ImageLength)
+	if err != nil {
+		return nil, err
+	}
+	// Validate that ImageWidth is present; it is required by the TIFF spec even
+	// though readStripData does not use it (per-strip byte counts already encode
+	// the row width).
+	if _, err := tagUint32Slice(tags, ImageWidth); err != nil {
+		return nil, err
+	}
+	rowsPerStripVals, err := tagUint32Slice(tags, RowsPerStrip)
+	if err != nil {
+		return nil, err
+	}
+	offsets, err := tagUint32Slice(tags, StripOffsets)
+	if err != nil {
+		return nil, err
+	}
+	byteCounts, err := tagUint32Slice(tags, StripByteCounts)
+	if err != nil {
+		return nil, err
 	}
 
-	imageLength := shortData[ImageLength][0]
-	rowsPerStrip := shortData[RowsPerStrip][0]
-	bitsPerSample := shortData[BitsPerSample][0]
-	offsets := longData[StripOffsets]
-	byteCounts := longData[StripByteCounts]
+	imageLength := imageLengthVals[0]
+	rowsPerStrip := rowsPerStripVals[0]
+	bitsPerSample := bitsPerSampleVals[0]
 
 	// From the TIFF 6.0 Specification (p.38):
 	// StripsPerImage = floor((ImageLength + RowsPerStrip - 1) / RowsPerStrip)
@@ -403,7 +442,7 @@ func readStripData(r io.ReadSeeker, tags Tags, header head) ([][]float32, error)
 
 	data := make([][]float32, 0, numStrips)
 	for i, offset := range offsets {
-		numPixels := uint32(byteCounts[i]) / (uint32(bitsPerSample) / eightByte)
+		numPixels := byteCounts[i] / (bitsPerSample / eightByte)
 		stripData := make([]float32, numPixels)
 		if _, err := r.Seek(int64(offset), io.SeekStart); err != nil {
 			return nil, fmt.Errorf("%w: could not find offset: got %s", errGeoTIFFData, err)
@@ -684,25 +723,22 @@ func Read(r io.ReadSeeker) (*GeoTIFF, error) {
 			return nil, err
 		}
 
-		fields := [...]Tag{ImageLength, ImageWidth, TileWidth, TileLength}
-		shortData := make(map[Tag][]uint16, len(fields))
-		for _, f := range fields {
-			v, ok := gTags[f]
-			if !ok {
-				return nil, fmt.Errorf("%w, could not retrieve %s", errGeoTIFFData, f)
+		for _, f := range [...]Tag{ImageLength, ImageWidth, TileWidth, TileLength} {
+			vals, ferr := tagUint32Slice(gTags, f)
+			if ferr != nil {
+				return nil, ferr
 			}
-			ftype, elem := v.value()
-			switch ftype {
-			case SHORT:
-				shortData[f] = elem[0].([]uint16)
-			default:
-				return nil, fmt.Errorf("%w, incorrect data type for %s - %s", errGeoTIFFData, f, ftype)
+			switch f {
+			case ImageWidth:
+				imageWidth = uint16(vals[0])
+			case ImageLength:
+				imageLength = uint16(vals[0])
+			case TileWidth:
+				tileW = uint16(vals[0])
+			case TileLength:
+				tileLen = uint16(vals[0])
 			}
 		}
-		imageWidth = shortData[ImageWidth][0]
-		imageLength = shortData[ImageLength][0]
-		tileW = shortData[TileWidth][0]
-		tileLen = shortData[TileLength][0]
 	} else {
 		// Striped format
 		gData, err = readStripData(r, gTags, header)
@@ -710,27 +746,23 @@ func Read(r io.ReadSeeker) (*GeoTIFF, error) {
 			return nil, err
 		}
 
-		fields := [...]Tag{ImageLength, ImageWidth, RowsPerStrip}
-		shortData := make(map[Tag][]uint16, len(fields))
-		for _, f := range fields {
-			v, ok := gTags[f]
-			if !ok {
-				return nil, fmt.Errorf("%w, could not retrieve %s", errGeoTIFFData, f)
+		for _, f := range [...]Tag{ImageLength, ImageWidth, RowsPerStrip} {
+			vals, ferr := tagUint32Slice(gTags, f)
+			if ferr != nil {
+				return nil, ferr
 			}
-			ftype, elem := v.value()
-			switch ftype {
-			case SHORT:
-				shortData[f] = elem[0].([]uint16)
-			default:
-				return nil, fmt.Errorf("%w, incorrect data type for %s - %s", errGeoTIFFData, f, ftype)
+			switch f {
+			case ImageWidth:
+				imageWidth = uint16(vals[0])
+			case ImageLength:
+				imageLength = uint16(vals[0])
+			case RowsPerStrip:
+				tileLen = uint16(vals[0])
 			}
 		}
-		imageWidth = shortData[ImageWidth][0]
-		imageLength = shortData[ImageLength][0]
-		// For striped files, set effective tile dimensions to (imageWidth,
-		// rowsPerStrip) so that loc() works without modification.
+		// For striped files, set effective tile width to imageWidth so that
+		// loc() works without modification.
 		tileW = imageWidth
-		tileLen = shortData[RowsPerStrip][0]
 	}
 
 	pixelScale := gTags[ModelPixelScale]
